@@ -110,23 +110,9 @@ func VerifyRekorSET(publicKeys []*ecdsa.PublicKey, unverifiedRekorSET []byte, un
 	if err := json.Unmarshal(unverifiedRekorSET, &untrustedSET); err != nil {
 		return time.Time{}, NewInvalidSignatureError(err.Error())
 	}
-	// == Verify SET signature
-	// Cosign unmarshals and re-marshals UntrustedPayload; that seems unnecessary,
-	// assuming jsoncanonicalizer is designed to operate on untrusted data.
-	untrustedSETPayloadCanonicalBytes, err := jsoncanonicalizer.Transform(untrustedSET.UntrustedPayload)
+	untrustedSETPayloadCanonicalBytes, err := verifyRekorSETSignature(publicKeys, untrustedSET.UntrustedPayload, untrustedSET.UntrustedSignedEntryTimestamp)
 	if err != nil {
-		return time.Time{}, NewInvalidSignatureError(fmt.Sprintf("canonicalizing Rekor SET JSON: %v", err))
-	}
-	untrustedSETPayloadHash := sha256.Sum256(untrustedSETPayloadCanonicalBytes)
-	publicKeymatched := false
-	for _, pk := range publicKeys {
-		if ecdsa.VerifyASN1(pk, untrustedSETPayloadHash[:], untrustedSET.UntrustedSignedEntryTimestamp) {
-			publicKeymatched = true
-			break
-		}
-	}
-	if !publicKeymatched {
-		return time.Time{}, NewInvalidSignatureError("cryptographic signature verification of Rekor SET failed")
+		return time.Time{}, err
 	}
 
 	// == Parse SET payload
@@ -223,4 +209,29 @@ func VerifyRekorSET(publicKeys []*ecdsa.PublicKey, unverifiedRekorSET []byte, un
 
 	// == All OK; return the relevant time.
 	return time.Unix(rekorPayload.IntegratedTime, 0), nil
+}
+
+// verifyRekorSETSignature authenticates a SET over its canonical JSON payload.
+// It returns the authenticated canonical bytes, without interpreting record content.
+func verifyRekorSETSignature(publicKeys []*ecdsa.PublicKey, payload, signature []byte) ([]byte, error) {
+	// == Verify SET signature
+	// Cosign unmarshals and re-marshals UntrustedPayload; that seems unnecessary,
+	// assuming jsoncanonicalizer is designed to operate on untrusted data.
+	untrustedSETPayloadCanonicalBytes, err := jsoncanonicalizer.Transform(payload)
+	if err != nil {
+		return nil, NewInvalidSignatureError(fmt.Sprintf("canonicalizing Rekor SET JSON: %v", err))
+	}
+	untrustedSETPayloadHash := sha256.Sum256(untrustedSETPayloadCanonicalBytes)
+	publicKeymatched := false
+	for _, pk := range publicKeys {
+		if ecdsa.VerifyASN1(pk, untrustedSETPayloadHash[:], signature) {
+			publicKeymatched = true
+			break
+		}
+	}
+	if !publicKeymatched {
+		return nil, NewInvalidSignatureError("cryptographic signature verification of Rekor SET failed")
+	}
+
+	return untrustedSETPayloadCanonicalBytes, nil
 }
